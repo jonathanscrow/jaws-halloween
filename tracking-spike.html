@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JAWS Tracking Spike</title>
+<style>
+  :root {
+    --ok: #2ecc71;
+    --bad: #ff4d4d;
+    --warn: #ffcc33;
+    --panel: rgba(12, 16, 22, 0.82);
+    --ink: #e8eef4;
+    --dim: #8fa0b0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: #05080c; color: var(--ink);
+    font: 14px/1.4 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  }
+  #stage {
+    position: relative; width: 100vw; height: 100vh; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; background: #000;
+  }
+  #mirror {
+    position: relative; transform: scaleX(-1);
+    max-width: 100%; max-height: 100%;
+  }
+  #video { display: block; max-width: 100vw; max-height: 100vh; }
+  #overlay { position: absolute; inset: 0; }
+
+  #hud {
+    position: absolute; top: 12px; left: 12px; z-index: 5;
+    background: var(--panel); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 14px 16px; min-width: 320px;
+    backdrop-filter: blur(6px);
+  }
+  #hud h1 { font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  .gate { display: flex; align-items: baseline; justify-content: space-between;
+    padding: 8px 10px; border-radius: 8px; margin-bottom: 6px;
+    background: rgba(255,255,255,0.03); }
+  .gate .label { color: var(--dim); font-size: 12px; }
+  .gate .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .gate .unit { font-size: 12px; color: var(--dim); margin-left: 3px; }
+  .gate.pass { box-shadow: inset 0 0 0 1px var(--ok); }
+  .gate.fail { box-shadow: inset 0 0 0 1px var(--bad); }
+  .gate.pass .val { color: var(--ok); }
+  .gate.fail .val { color: var(--bad); }
+  .gate .verdict { font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+  .gate.pass .verdict { color: var(--ok); }
+  .gate.fail .verdict { color: var(--bad); }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--dim);
+    margin-top: 8px; }
+  .row b { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .subline { font-size: 11px; color: var(--dim); margin: 2px 2px 0;
+    font-variant-numeric: tabular-nums; }
+  .subline b { color: var(--ink); font-weight: 600; }
+
+  #controls {
+    position: absolute; bottom: 12px; left: 12px; z-index: 5;
+    background: var(--panel); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 12px 14px; display: flex; gap: 12px;
+    align-items: center; flex-wrap: wrap; backdrop-filter: blur(6px); max-width: 96vw;
+  }
+  #controls label { font-size: 11px; color: var(--dim); display: flex; flex-direction: column; gap: 3px; }
+  select, button {
+    font: inherit; color: var(--ink); background: #131a22;
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 7px 10px;
+  }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: #1c6dd0; border-color: #1c6dd0; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=range] { width: 130px; accent-color: #1c6dd0; }
+  .sw { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink);
+    padding: 6px 8px; background: rgba(255,255,255,0.04); border-radius: 8px; }
+  .divider { width: 1px; align-self: stretch; background: rgba(255,255,255,0.1); }
+  #status { font-size: 12px; color: var(--dim); max-width: 260px; }
+  .hidden { display: none !important; }
+  #splash {
+    position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; gap: 16px;
+    background: radial-gradient(1200px 600px at 50% 30%, #0b1c2e, #05080c);
+    padding: 24px;
+  }
+  #splash h2 { font-size: 22px; margin: 0; }
+  #splash p { color: var(--dim); max-width: 560px; margin: 0; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="mirror">
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="hud" class="hidden">
+    <h1>Tracking Spike — go / no-go</h1>
+
+    <div class="gate" id="gate-fps">
+      <span class="label">Frame rate</span>
+      <span><span class="val" id="fps">--</span><span class="unit">fps render</span></span>
+      <span class="verdict" id="fps-v"></span>
+    </div>
+    <div class="subline">tracking <b id="trackfps">--</b> fps · detect <b id="detms">--</b> ms</div>
+
+    <div class="gate" id="gate-pose" style="margin-top:8px">
+      <span class="label">Poses locked</span>
+      <span><span class="val" id="poses">--</span><span class="unit" id="flick"></span></span>
+      <span class="verdict" id="pose-v"></span>
+    </div>
+
+    <div class="gate" id="gate-jit" style="margin-top:8px">
+      <span class="label" id="jit-label">Jitter (hold still)</span>
+      <span><span class="val" id="jitter">--</span><span class="unit">px</span></span>
+      <span class="verdict" id="jit-v"></span>
+    </div>
+    <div class="subline">raw <b id="jraw">--</b> · smoothed <b id="jsm">--</b> · lag when moving <b id="lag">--</b> px</div>
+
+    <div class="row">
+      <span>shoulder&nbsp;<b id="shoulder">--</b>px</span>
+      <span>video&nbsp;<b id="vres">--</b></span>
+    </div>
+  </div>
+
+  <div id="controls" class="hidden">
+    <label>Camera<select id="cam"></select></label>
+    <label>Capture
+      <select id="res">
+        <option value="1280x720" selected>720p (fast)</option>
+        <option value="1920x1080">1080p</option>
+        <option value="640x480">480p (fastest)</option>
+      </select>
+    </label>
+    <label>Model
+      <select id="model">
+        <option value="lite">lite (fast)</option>
+        <option value="full" selected>full</option>
+        <option value="heavy">heavy (steadiest)</option>
+      </select>
+    </label>
+    <label>Max poses
+      <select id="npose">
+        <option value="2" selected>2</option>
+        <option value="1">1</option>
+        <option value="3">3</option>
+      </select>
+    </label>
+    <button id="apply">Apply</button>
+
+    <div class="divider"></div>
+
+    <label class="sw"><input type="checkbox" id="smooth" checked> Smoothing</label>
+    <label>min-cutoff <span id="mcv">1.0</span> Hz
+      <input type="range" id="mc" min="0.1" max="5" step="0.1" value="1.0">
+    </label>
+    <label>beta <span id="bv">0.007</span>
+      <input type="range" id="beta" min="0" max="0.05" step="0.001" value="0.007">
+    </label>
+
+    <div class="divider"></div>
+
+    <label>min-confidence <span id="confv">0.60</span>
+      <input type="range" id="conf" min="0.3" max="0.9" step="0.05" value="0.6">
+    </label>
+    <label>visibility gate <span id="visv">0.50</span>
+      <input type="range" id="vis" min="0" max="0.9" step="0.05" value="0.5">
+    </label>
+
+    <button id="measure" class="primary">Measure jitter (3s)</button>
+    <span id="status"></span>
+  </div>
+
+  <div id="splash">
+    <h2>🦈 JAWS Tracking Spike</h2>
+    <p>Grey box, no art. Three numbers decide the project:
+       <b>tracking FPS &gt; 24</b>, <b>poses steady (no flicker to 0)</b>, and
+       <b>jitter &lt; 2.5&nbsp;px while holding still</b>. Smoothing on = the number that
+       matters for the real shark. Grant camera access when asked; serve over
+       localhost or https.</p>
+    <button id="start" class="primary" style="font-size:16px;padding:12px 22px;">Start camera</button>
+    <p id="splashErr" style="color:var(--bad)"></p>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs";
+
+// ---- gate thresholds -------------------------------------------------------
+const GATE_FPS = 24;          // tracking fps
+const GATE_JITTER = 2.5;      // px
+const FLICKER_WINDOW = 90;    // detections (~3s at 30fps) for flicker counting
+const JIT_WINDOW = 30;        // detections for the rolling jitter window
+
+const MODEL_URLS = {
+  lite:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  heavy: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+};
+
+const LM = { LSH: 11, RSH: 12 };
+
+const els = id => document.getElementById(id);
+const video = els("video"), canvas = els("overlay"), ctx = canvas.getContext("2d");
+
+let landmarker = null, fileset = null, stream = null;
+let running = false, lastVideoTime = -1, rafId = null;
+
+// ---- One-Euro filter -------------------------------------------------------
+class LowPass {
+  constructor() { this.s = null; }
+  filter(x, a) { this.s = (this.s == null) ? x : a * x + (1 - a) * this.s; return this.s; }
+}
+class OneEuro {
+  constructor(minCutoff = 1.0, beta = 0.0, dCutoff = 1.0) {
+    this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
+    this.xf = new LowPass(); this.dxf = new LowPass();
+    this.tPrev = null; this.xPrev = null;
+  }
+  alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  filter(x, t) {
+    let dt = (this.tPrev == null) ? 1 / 30 : Math.max((t - this.tPrev) / 1000, 1e-4);
+    this.tPrev = t;
+    const dx = (this.xPrev == null) ? 0 : (x - this.xPrev) / dt;
+    this.xPrev = x;
+    const edx = this.dxf.filter(dx, this.alpha(this.dCutoff, dt));
+    const cutoff = this.minCutoff + this.beta * Math.abs(edx);
+    return this.xf.filter(x, this.alpha(cutoff, dt));
+  }
+}
+// smoothing filters, keyed by pose index. NOTE: MediaPipe does not guarantee a
+// stable pose order across frames — for 2 people this can swap identities and
+// briefly confuse per-index smoothing. The real build needs identity tracking;
+// for the spike this is good enough to read the smoothed-jitter number.
+const smooth = {};
+function filtersFor(i) {
+  if (!smooth[i]) smooth[i] = {
+    lx: new OneEuro(), ly: new OneEuro(), rx: new OneEuro(), ry: new OneEuro(),
+  };
+  const mc = parseFloat(els("mc").value), beta = parseFloat(els("beta").value);
+  for (const k in smooth[i]) { smooth[i][k].minCutoff = mc; smooth[i][k].beta = beta; }
+  return smooth[i];
+}
+function resetFilters() { for (const k in smooth) delete smooth[k]; }
+
+// ---- metrics state ---------------------------------------------------------
+const renderTs = [];          // render-loop timestamps (frame-count window)
+const trackTs = [];           // detection timestamps → tracking fps
+const detBuf = [];            // detect() durations
+const poseHist = [];          // pose counts per detection → flicker
+const jitRaw = [], jitSm = []; // pose-0 shoulder positions, raw & smoothed
+const lagBuf = [];            // |raw - smoothed| per detection (responsiveness)
+let poseState = [];           // per-pose {rawC, smC, shoulderPx} for drawing
+let measure = null;           // {until, pRaw, pSm, pLag}
+
+// ---- camera ----------------------------------------------------------------
+async function listCameras() {
+  const sel = els("cam");
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const cams = devs.filter(d => d.kind === "videoinput");
+    sel.innerHTML = "";
+    cams.forEach((c, i) => {
+      const o = document.createElement("option");
+      o.value = c.deviceId; o.textContent = c.label || `Camera ${i + 1}`;
+      sel.appendChild(o);
+    });
+  } catch (e) { /* ignore */ }
+}
+async function startCamera() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const [w, h] = els("res").value.split("x").map(Number);
+  const camId = els("cam").value;
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 60 },
+      ...(camId ? { deviceId: { exact: camId } } : { facingMode: "user" }),
+    },
+  });
+  video.srcObject = stream;
+  await video.play();
+  await new Promise(r => { if (video.videoWidth) return r(); video.onloadedmetadata = () => r(); });
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  els("vres").textContent = `${video.videoWidth}×${video.videoHeight}`;
+}
+async function buildLandmarker() {
+  if (landmarker) { landmarker.close(); landmarker = null; }
+  if (!fileset) {
+    fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm");
+  }
+  const numPoses = Number(els("npose").value);
+  const conf = parseFloat(els("conf").value);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL_URLS[els("model").value], delegate },
+    runningMode: "VIDEO", numPoses,
+    // raise these off the permissive 0.5 defaults to cut phantom detections on
+    // empty frames (shadows / background patterns misread as a person)
+    minPoseDetectionConfidence: conf,
+    minPosePresenceConfidence: conf,
+    minTrackingConfidence: conf,
+  });
+  try { landmarker = await PoseLandmarker.createFromOptions(fileset, opts("GPU")); }
+  catch (e) {
+    landmarker = await PoseLandmarker.createFromOptions(fileset, opts("CPU"));
+    setStatus("GPU delegate unavailable — running on CPU.");
+  }
+}
+function setStatus(m) { els("status").textContent = m || ""; }
+
+// ---- main loop -------------------------------------------------------------
+function loop() {
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  const now = performance.now();
+  if (video.readyState < 2) return;
+
+  renderTs.push(now);
+  while (renderTs.length > 45) renderTs.shift();
+
+  if (video.currentTime !== lastVideoTime && landmarker) {
+    lastVideoTime = video.currentTime;
+    const t0 = performance.now();
+    let result = null;
+    try { result = landmarker.detectForVideo(video, now); } catch (e) {}
+    detBuf.push(performance.now() - t0);
+    while (detBuf.length > 30) detBuf.shift();
+    if (result) {
+      trackTs.push(now);
+      while (trackTs.length > 30) trackTs.shift();
+      processDetection(result, now);
+    }
+  }
+  draw();
+  updateHud();
+}
+
+const VIS_KEY = [0, 11, 12, 23, 24]; // nose, shoulders, hips
+function poseVisibility(lm) {
+  const vs = VIS_KEY.map(k => (lm[k] && lm[k].visibility != null) ? lm[k].visibility : 1);
+  return vs.reduce((a, b) => a + b, 0) / vs.length;
+}
+function processDetection(result, t) {
+  const all = result.landmarks ?? [];
+  // visibility gate: reject low-confidence phantom poses (empty-frame misfires)
+  const visGate = parseFloat(els("vis").value);
+  const poses = all.filter(lm => poseVisibility(lm) >= visGate);
+  poseHist.push(poses.length);
+  while (poseHist.length > FLICKER_WINDOW) poseHist.shift();
+
+  const smoothing = els("smooth").checked;
+  poseState = poses.map((lm, i) => {
+    const lsh = lm[LM.LSH], rsh = lm[LM.RSH];
+    if (!lsh || !rsh) return null;
+    const raw = {
+      lx: lsh.x * canvas.width, ly: lsh.y * canvas.height,
+      rx: rsh.x * canvas.width, ry: rsh.y * canvas.height,
+    };
+    let sm = raw;
+    if (smoothing) {
+      const f = filtersFor(i);
+      sm = { lx: f.lx.filter(raw.lx, t), ly: f.ly.filter(raw.ly, t),
+             rx: f.rx.filter(raw.rx, t), ry: f.ry.filter(raw.ry, t) };
+    }
+    const rawC = { x: (raw.lx + raw.rx) / 2, y: (raw.ly + raw.ry) / 2 };
+    const smC  = { x: (sm.lx + sm.rx) / 2,  y: (sm.ly + sm.ry) / 2 };
+    const shoulderPx = Math.hypot(sm.lx - sm.rx, sm.ly - sm.ry);
+    return { raw, sm, rawC, smC, shoulderPx, i };
+  }).filter(Boolean);
+
+  // jitter / lag tracked on pose 0's left shoulder
+  const p0 = poseState[0];
+  if (p0) {
+    els("shoulder").textContent = p0.shoulderPx.toFixed(0);
+    pushCapped(jitRaw, { x: p0.raw.lx, y: p0.raw.ly });
+    pushCapped(jitSm,  { x: p0.sm.lx,  y: p0.sm.ly });
+    const lag = Math.hypot(p0.raw.lx - p0.sm.lx, p0.raw.ly - p0.sm.ly);
+    pushCapped(lagBuf, lag);
+    if (measure) {
+      measure.pRaw = Math.max(measure.pRaw, rms(jitRaw) ?? 0);
+      measure.pSm  = Math.max(measure.pSm,  rms(jitSm) ?? 0);
+      measure.pLag = Math.max(measure.pLag, lag);
+      if (t >= measure.until) {
+        setStatus(`3s peak — raw ${measure.pRaw.toFixed(1)} · smoothed ${measure.pSm.toFixed(2)} · lag ${measure.pLag.toFixed(1)} px`);
+        measure = null; els("measure").disabled = false;
+      }
+    }
+  } else {
+    jitRaw.length = jitSm.length = lagBuf.length = 0;
+  }
+}
+function pushCapped(arr, v) { arr.push(v); while (arr.length > JIT_WINDOW) arr.shift(); }
+function rms(buf) {
+  if (buf.length < 8) return null;
+  const n = buf.length;
+  const mx = buf.reduce((s, p) => s + p.x, 0) / n;
+  const my = buf.reduce((s, p) => s + p.y, 0) / n;
+  const ms = buf.reduce((s, p) => s + (p.x - mx) ** 2 + (p.y - my) ** 2, 0) / n;
+  return Math.sqrt(ms);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const smoothing = els("smooth").checked;
+  poseState.forEach(p => {
+    const c = smoothing ? p.smC : p.rawC;
+    const boxW = p.shoulderPx * 3.4, boxH = boxW * 0.42;
+    ctx.save();
+    ctx.fillStyle = p.i === 0 ? "rgba(150,158,168,0.34)" : "rgba(120,150,190,0.30)";
+    ctx.strokeStyle = p.i === 0 ? "rgba(210,216,224,0.95)" : "rgba(150,190,235,0.95)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(c.x - boxW / 2, c.y - boxH / 2, boxW, boxH, 10);
+    ctx.fill(); ctx.stroke();
+    // faint raw marker so you can SEE how much smoothing is removing
+    if (smoothing) {
+      ctx.fillStyle = "rgba(255,90,90,0.9)";
+      ctx.beginPath(); ctx.arc(p.rawC.x, p.rawC.y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+}
+
+function fpsFrom(buf) {
+  return buf.length >= 2 ? (buf.length - 1) / ((buf[buf.length - 1] - buf[0]) / 1000) : 0;
+}
+function updateHud() {
+  const rfps = fpsFrom(renderTs), tfps = fpsFrom(trackTs);
+  els("fps").textContent = rfps.toFixed(0);
+  els("trackfps").textContent = tfps.toFixed(0);
+  markGate("gate-fps", "fps-v", tfps >= GATE_FPS, tfps >= GATE_FPS ? "PASS" : "FAIL");
+
+  const cur = poseHist.length ? poseHist[poseHist.length - 1] : 0;
+  let flick = 0;
+  for (let k = 1; k < poseHist.length; k++)
+    if (poseHist[k] === 0 && poseHist[k - 1] > 0) flick++;
+  els("poses").textContent = cur;
+  els("flick").textContent = flick ? `· ${flick} drop${flick > 1 ? "s" : ""}/3s` : "· steady";
+  markGate("gate-pose", "pose-v", cur >= 1 && flick === 0, cur === 0 ? "NO POSE" : (flick === 0 ? "PASS" : "FLICKER"));
+
+  const smoothing = els("smooth").checked;
+  const jr = rms(jitRaw), js = rms(jitSm);
+  els("jraw").textContent = jr == null ? "--" : jr.toFixed(1);
+  els("jsm").textContent  = js == null ? "--" : js.toFixed(2);
+  els("lag").textContent  = lagBuf.length ? lagBuf[lagBuf.length - 1].toFixed(1) : "--";
+  els("jit-label").textContent = smoothing ? "Jitter (smoothed, hold still)" : "Jitter (raw, hold still)";
+  const shown = smoothing ? js : jr;
+  els("jitter").textContent = shown == null ? "--" : shown.toFixed(2);
+  els("detms").textContent = detBuf.length ? (detBuf.reduce((a, b) => a + b, 0) / detBuf.length).toFixed(1) : "--";
+  if (shown != null) markGate("gate-jit", "jit-v", shown < GATE_JITTER, shown < GATE_JITTER ? "PASS" : "FAIL");
+}
+function markGate(gateId, vId, pass, label) {
+  const g = els(gateId);
+  g.classList.toggle("pass", pass); g.classList.toggle("fail", !pass);
+  els(vId).textContent = label;
+}
+
+// ---- boot / controls -------------------------------------------------------
+async function boot() {
+  els("splashErr").textContent = "";
+  try { await startCamera(); await listCameras(); await buildLandmarker(); }
+  catch (e) { els("splashErr").textContent = "Init failed: " + (e?.message || e); console.error(e); return; }
+  els("splash").classList.add("hidden");
+  els("hud").classList.remove("hidden");
+  els("controls").classList.remove("hidden");
+  running = true; loop();
+}
+async function reapply() {
+  running = false; if (rafId) cancelAnimationFrame(rafId);
+  renderTs.length = trackTs.length = detBuf.length = poseHist.length = 0;
+  jitRaw.length = jitSm.length = lagBuf.length = 0;
+  poseState = []; resetFilters(); lastVideoTime = -1;
+  setStatus("Applying…");
+  try { await startCamera(); await buildLandmarker(); setStatus(""); }
+  catch (e) { setStatus("Error: " + (e?.message || e)); }
+  running = true; loop();
+}
+
+els("start").addEventListener("click", boot);
+els("apply").addEventListener("click", reapply);
+els("cam").addEventListener("change", reapply);
+els("mc").addEventListener("input", () => els("mcv").textContent = parseFloat(els("mc").value).toFixed(1));
+els("beta").addEventListener("input", () => els("bv").textContent = parseFloat(els("beta").value).toFixed(3));
+els("vis").addEventListener("input", () => els("visv").textContent = parseFloat(els("vis").value).toFixed(2)); // live
+els("conf").addEventListener("input", () => els("confv").textContent = parseFloat(els("conf").value).toFixed(2));
+els("conf").addEventListener("change", reapply); // confidence is a build-time option → rebuild
+els("smooth").addEventListener("change", resetFilters);
+els("measure").addEventListener("click", () => {
+  measure = { until: performance.now() + 3000, pRaw: 0, pSm: 0, pLag: 0 };
+  els("measure").disabled = true; setStatus("Hold still…");
+});
+
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.beginPath(); this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r);
+    this.closePath(); return this;
+  };
+}
+</script>
+</body>
+</html>

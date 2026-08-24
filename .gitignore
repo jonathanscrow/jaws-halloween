@@ -1,0 +1,17 @@
+# Large binaries — keep out of git (use Dropbox/Drive or Git LFS, reference by path)
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.psd
+*.psb
+*.tiff
+
+# Tooling / OS cruft
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+
+# Local scratch
+vend/
