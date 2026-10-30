@@ -99,7 +99,8 @@
   <div class="sub">Jaws (mouth open)</div>
   <label>Mouth-open dead zone <span id="gapeDeadV"></span><input type="range" id="gapeDead" min="0" max="0.5" step="0.01"></label>
   <label>Mouth-open for full chomp <span id="gapeFullV"></span><input type="range" id="gapeFull" min="0.2" max="0.9" step="0.01"></label>
-  <label><input type="checkbox" id="autoChomp"> Auto-chomp when the face can't be read</label>
+  <label><input type="checkbox" id="handsChomp"> Raised hands open the jaws (for masks)</label>
+  <label><input type="checkbox" id="autoChomp"> Auto-chomp when the face can't be read and hands are down</label>
 
   <hr>
   <button id="reset">Reset settings to defaults</button>
@@ -129,7 +130,7 @@ const DEFAULTS = {
   sizeFar: 0.10, sizeNear: 0.34, scaleFar: 0.45, scaleNear: 1.05,
   // appear after 0.4s, hold through 0.33s gaps: zero blinks / phantoms on the test clips
   appear: 12, hold: 10, conf: 0.6,
-  gapeDead: 0.15, gapeFull: 0.5, autoChomp: true,
+  gapeDead: 0.15, gapeFull: 0.5, autoChomp: true, handsChomp: true,
   camId: "",
 };
 const cfg = { ...DEFAULTS };
@@ -405,7 +406,9 @@ const layer = (() => {
 })();
 
 // ---- one shark per tracked person ---------------------------------------------
-const TINTS = [[1, 1, 1], [0.93, 0.98, 1.08]];        // second shark nudged bluer (handoff)
+const TINTS = [[1, 1, 1], [0.93, 0.98, 1.08]];
+// shark's reach from its centre in art px, including tail swish, raised fins, open jaw, tilt, bob
+const SHARK_HALF_W = 850, SHARK_HALF_H = 370, EDGE_PAD = 24;        // second shark nudged bluer (handoff)
 class Shark {
   constructor(slot) {
     this.slot = slot; this.fx = new OneEuro(0.8, 0.004); this.fs = new OneEuro(0.6, 0.5);
@@ -418,7 +421,7 @@ class Shark {
     this.x = W / 2; this.scale = 0.6; this.y = H * cfg.yPos;
     this.facing = -1; this.flip = -1; this.second = false; this.dirTime = 0; this.vx = 0;
     this.finN = 0; this.finF = 0; this.finNT = null; this.finFT = null;
-    this.gape = 0; this.gapeT = 0; this.faceSeen = -1e9; this.chompAt = 0; this.jawHist = [];
+    this.handsT = 0; this.gape = 0; this.gapeT = 0; this.faceSeen = -1e9; this.chompAt = 0; this.jawHist = [];
   }
   // called once per tracker update with this slot's person (or null)
   observe(o, t) {
@@ -428,10 +431,11 @@ class Shark {
         this.active = true; this.fx.reset(); this.fs.reset();
         // whoever shows up second gets the second-shark look, whichever slot they landed in
         this.second = sharks.some(s => s !== this && s.active);
-        this.x = this.targetX(o.x); this.scale = this.targetScale(o.size);
+        this.scale = this.targetScale(o.size); this.x = this.targetX(o.x);
       }
       if (o.armN != null) this.finNT = o.armN;
       if (o.armF != null) this.finFT = o.armF;
+      if (o.hands != null) this.handsT = o.hands;     // held through dropouts, like the fins
       if (o.jaw != null) {
         // jawOpen flickers read to read (0.56, 0, 0.40...): hold the max of the last 0.25s
         this.jawHist.push([t, o.jaw]);
@@ -444,7 +448,16 @@ class Shark {
       if (!this.active && this.missRun >= cfg.hold) this.obs = null;
     }
   }
-  targetX(xn) { return lerp(W * 0.08, W * 0.92, clamp((xn - cfg.xMin) / (cfg.xMax - cfg.xMin), 0, 1)); }
+  // the whole shark stays on screen while someone's there: the camera range maps onto
+  // however much room is left once the shark's own half-width is kept off each edge
+  targetX(xn) {
+    const [x0, x1] = this.xRange();
+    return lerp(x0, x1, clamp((xn - cfg.xMin) / (cfg.xMax - cfg.xMin), 0, 1));
+  }
+  xRange() {
+    const half = SHARK_HALF_W * this.scale + EDGE_PAD;
+    return half * 2 >= W ? [W / 2, W / 2] : [half, W - half];
+  }
   targetScale(size) {
     const k = clamp((size - cfg.sizeFar) / (cfg.sizeNear - cfg.sizeFar), 0, 1);
     return lerp(cfg.scaleFar, cfg.scaleNear, k) * (this.second ? 0.9 : 1);
@@ -454,7 +467,8 @@ class Shark {
     const o = this.obs, ms = t * 1000;
     if (this.active && o) {
       const px = this.x;
-      this.x = this.fx.f(this.targetX(o.x), ms);
+      const [x0, x1] = this.xRange();
+      this.x = clamp(this.fx.f(this.targetX(o.x), ms), x0, x1);
       this.scale = this.fs.f(this.targetScale(o.size), ms);
       this.vx = follow(this.vx, (this.x - px) / Math.max(realDt, 1e-3), realDt, 0.15);
     } else if (this.alpha > 0) {
@@ -466,7 +480,8 @@ class Shark {
     // two sharks: spread vertically so they don't sit on top of each other
     const both = others.some(s => s !== this && s.alpha > 0.05);
     const yT = H * cfg.yPos + (both ? (this.second ? 1 : -1) * H * 0.12 : 0);
-    this.y = follow(this.y, yT, dt, 0.6);
+    const halfH = SHARK_HALF_H * this.scale + EDGE_PAD;
+    this.y = follow(this.y, halfH * 2 >= H ? H / 2 : clamp(yT, halfH, H - halfH), dt, 0.6);
 
     // direction flip with hysteresis: ~0.5s of consistent travel (art faces left = -1)
     const dir = this.vx > 70 ? 1 : this.vx < -70 ? -1 : 0;
@@ -482,10 +497,12 @@ class Shark {
     this.finN = follow(this.finN, nT, dt, 0.08);
     this.finF = follow(this.finF, fT, dt, 0.11);
 
-    // jaws: face when readable; otherwise an occasional chomp so a still shark isn't dead
-    let g = this.gapeT;
-    if (t - this.faceSeen > 1.0) {
-      g = 0;
+    // jaws: the more open of mouth (when the face is readable) and raised hands;
+    // with neither, an occasional chomp so a still shark isn't dead
+    const faceOk = t - this.faceSeen <= 1.0;
+    const hands = cfg.handsChomp && this.active ? this.handsT : 0;
+    let g = Math.max(faceOk ? this.gapeT : 0, hands);
+    if (!faceOk && hands < 0.05) {
       if (cfg.autoChomp) {
         if (t > this.chompAt + 0.5) { if (Math.random() < dt / 3.5) this.chompAt = t; }
         const ct = t - this.chompAt; if (ct < 0.5) g = Math.sin(Math.PI * ct / 0.5);
@@ -570,9 +587,12 @@ function armAngle(lm, sh, el, wr, vw, vh) {
   if (!end || vis(lm[sh]) < 0.5) return null;
   const dx = (end.x - lm[sh].x) * vw, dy = (end.y - lm[sh].y) * vh;
   const len = Math.hypot(dx, dy); if (len < 1e-3) return null;
-  const a = Math.acos(clamp(dy / len, -1, 1)) / deg;
-  return lerp(FIN.min + 5, FIN.max, clamp(a / 150, 0, 1));     // arms down ~ -15, overhead = +60
+  return Math.acos(clamp(dy / len, -1, 1)) / deg;
 }
+const armToFin = a => a == null ? null : lerp(FIN.min + 5, FIN.max, clamp(a / 150, 0, 1));   // down ~ -15, overhead +60
+// hands as a jaw control too (masks hide mouths): opens past shoulder height, full overhead
+const RAISE_START = 95, RAISE_FULL = 150;
+const armToGape = a => a == null ? null : smooth01((a - RAISE_START) / (RAISE_FULL - RAISE_START));
 
 // read jawOpen off a 256x256 crop around the head, so faces at walkway distance are big enough
 function readJaw(lm, vw, vh) {
@@ -606,7 +626,9 @@ function observe(lm, vw, vh, readFace) {
   // fins follow the arm on the shark's near side; swap when mirrored so it feels like a mirror
   let a = armAngle(lm, 12, 14, 16, vw, vh), b = armAngle(lm, 11, 13, 15, vw, vh);
   if (!cfg.mirror) [a, b] = [b, a];
-  return { x, size, armN: a, armF: b, jaw: readFace ? readJaw(lm, vw, vh) : null };
+  const raise = a == null && b == null ? null : Math.max(a ?? 0, b ?? 0);
+  return { x, size, armN: armToFin(a), armF: armToFin(b), hands: armToGape(raise),
+    jaw: readFace ? readJaw(lm, vw, vh) : null };
 }
 
 function assign(obs) {
@@ -655,7 +677,7 @@ function demoTrack(now) {
   const size = 0.12 + 0.2 * (0.5 + 0.5 * Math.sin(2 * Math.PI * t / 9));
   const flap = 0.5 + 0.5 * Math.sin(2 * Math.PI * t / 2.4);
   const chomp = Math.max(0, Math.sin(2 * Math.PI * t / 3.1)) ** 3;
-  let o = present ? { x, size, armN: lerp(-15, 60, flap), armF: lerp(-15, 60, 1 - flap), jaw: chomp } : null;
+  let o = present ? { x, size, armN: lerp(-15, 60, flap), armF: lerp(-15, 60, 1 - flap), hands: 0, jaw: chomp } : null;
   if (window.jaws.pin) o = window.jaws.pin;     // console/test hook: hold the fake visitor in one pose
   seenCount = present ? 1 : 0;
   sharks[0].observe(o, t); sharks[1].observe(null, t);
@@ -761,6 +783,7 @@ function syncControls() {
   for (const [k, dp] of Object.entries(SLIDERS)) { els(k).value = cfg[k]; els(k + "V").textContent = Number(cfg[k]).toFixed(dp); }
   els("model").value = cfg.model; els("mirror").checked = cfg.mirror;
   els("showCam").checked = cfg.showCam; els("autoChomp").checked = cfg.autoChomp;
+  els("handsChomp").checked = cfg.handsChomp;
 }
 for (const [k, dp] of Object.entries(SLIDERS)) {
   els(k).addEventListener("input", () => { cfg[k] = parseFloat(els(k).value); els(k + "V").textContent = cfg[k].toFixed(dp); saveCfg(); });
@@ -772,6 +795,7 @@ els("model").addEventListener("change", () => { cfg.model = els("model").value; 
 els("mirror").addEventListener("change", () => { cfg.mirror = els("mirror").checked; saveCfg(); });
 els("showCam").addEventListener("change", () => { cfg.showCam = els("showCam").checked; saveCfg(); });
 els("autoChomp").addEventListener("change", () => { cfg.autoChomp = els("autoChomp").checked; saveCfg(); });
+els("handsChomp").addEventListener("change", () => { cfg.handsChomp = els("handsChomp").checked; saveCfg(); });
 els("cam").addEventListener("change", async () => { cfg.camId = els("cam").value; saveCfg(); await go(startCamera); });
 els("reset").addEventListener("click", () => { Object.assign(cfg, DEFAULTS); saveCfg(); syncControls(); rebuild(); });
 els("fileBtn").addEventListener("click", () => els("file").click());
