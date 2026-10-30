@@ -32,9 +32,14 @@ fake visitor with no camera). It starts the camera on its own; allow camera acce
   how big it gets near vs far, how long it waits before appearing and holds through
   dropouts, and the jaw sensitivity. Settings save in that browser.
 - **Arms** drive the fins (down = tucked, overhead = full lift). **Distance** drives size,
-  from torso height, so turning side-on doesn't shrink the shark. **Mouth** drives the jaws
-  when the face is close enough to read; farther out the shark chomps on its own every few
-  seconds (toggle in settings).
+  from torso height, so turning side-on doesn't shrink the shark.
+- **Jaws** open with **raised hands** (past shoulder height, full overhead), which works
+  through masks and at any distance, or with the **mouth** when an unmasked face is close
+  enough to read; whichever is more open wins. With neither, the shark chomps on its own
+  every few seconds. Both are toggles in settings.
+- The **whole shark stays on screen** while someone's there; it only leaves the frame when
+  it swims off after they go. Close up the shark is nearly door-wide, so it has little room
+  to travel; "Shark scale when near" trades size for travel.
 - The shark appears after 12 frames in a row with a person (0.4 s) and holds through gaps
   of up to 10 frames. On the test clips that removed every blink and every phantom.
 - Run it in **Chrome fullscreen on the projector**. OBS browser sources don't get camera
