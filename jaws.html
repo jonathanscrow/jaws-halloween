@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JAWS</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font: 14px/1.4 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: #e8edf2; }
+  body.hide-cursor { cursor: none; }
+  /* fixed 1920x1080 output, letterboxed to whatever window it's in */
+  #out { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #000; }
+  #src { display: none; }
+
+  #debug {
+    position: absolute; top: 12px; left: 12px; z-index: 5; width: 340px; max-height: calc(100vh - 24px);
+    overflow: auto; background: rgba(12,16,20,0.88); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px; padding: 14px 16px; display: none;
+  }
+  #debug.show { display: block; }
+  #debug h1 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #9aa6b2; margin: 0 0 8px; }
+  #debug .row { display: flex; justify-content: space-between; gap: 8px; margin: 2px 0; }
+  #debug .row b { color: #fff; font-variant-numeric: tabular-nums; }
+  #debug label { display: block; margin-top: 8px; font-size: 12px; color: #9aa6b2; }
+  #debug label span { color: #fff; float: right; font-variant-numeric: tabular-nums; }
+  #debug input[type=range] { width: 100%; }
+  #debug select, #debug button { width: 100%; margin-top: 4px; padding: 6px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.15); background: #1b232b; color: #e8edf2; font: inherit; }
+  #debug button { cursor: pointer; }
+  #debug .sub { font-size: 12px; color: #9aa6b2; margin-top: 10px; }
+  #debug hr { border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 12px 0; }
+  #debug .help { font-size: 12px; color: #9aa6b2; }
+
+  #start {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; text-align: center; background: rgba(0,0,0,0.6); z-index: 6;
+  }
+  #start.hidden { display: none; }
+  #start button { font: 16px/1 inherit; padding: 12px 22px; border-radius: 8px; border: 0; cursor: pointer;
+    background: #2d7ff9; color: #fff; min-width: 220px; }
+  #start button.alt { background: #26313b; }
+  #start p { max-width: 520px; color: #c5ced8; margin: 0; }
+  #startErr { color: #ff8a8a; }
+</style>
+</head>
+<body>
+<canvas id="out" width="1920" height="1080"></canvas>
+<video id="src" playsinline muted></video>
+<input type="file" id="file" accept="video/*" hidden>
+
+<div id="start">
+  <h2 style="margin:0">JAWS</h2>
+  <p>Camera in, shark out. Press <b>D</b> for the settings panel, <b>F</b> for fullscreen.</p>
+  <button id="startCam">Start camera</button>
+  <button id="startFile" class="alt">Load video file…</button>
+  <button id="startDemo" class="alt">Demo (no camera)</button>
+  <p id="startErr"></p>
+</div>
+
+<div id="debug">
+  <h1>JAWS · settings (D to hide)</h1>
+  <div class="row"><span>render</span><b id="dRender">--</b></div>
+  <div class="row"><span>tracking</span><b id="dTrack">--</b></div>
+  <div class="row"><span>people seen / sharks shown</span><b id="dPeople">--</b></div>
+  <div class="row"><span>shark 1 size · gape · fins</span><b id="dS0">--</b></div>
+  <div class="row"><span>shark 2 size · gape · fins</span><b id="dS1">--</b></div>
+  <div class="row"><span>source</span><b id="dSrc">--</b></div>
+
+  <hr>
+  <label>Camera<select id="cam"></select></label>
+  <button id="fileBtn">Video file…</button>
+  <button id="demoBtn">Demo (no camera)</button>
+  <label>Model
+    <select id="model">
+      <option value="lite">lite (fastest)</option>
+      <option value="full">full</option>
+      <option value="heavy">heavy (steadiest)</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="mirror"> Mirror left/right</label>
+  <label><input type="checkbox" id="showCam"> Show camera inset (testing only)</label>
+
+  <div class="sub">Where the shark goes</div>
+  <label>Camera left edge <span id="xMinV"></span><input type="range" id="xMin" min="0" max="0.45" step="0.01"></label>
+  <label>Camera right edge <span id="xMaxV"></span><input type="range" id="xMax" min="0.55" max="1" step="0.01"></label>
+  <label>Shark height on door <span id="yPosV"></span><input type="range" id="yPos" min="0.25" max="0.75" step="0.01"></label>
+
+  <div class="sub">How big (torso height, as share of camera frame)</div>
+  <label>Far person <span id="sizeFarV"></span><input type="range" id="sizeFar" min="0.03" max="0.3" step="0.01"></label>
+  <label>Near person <span id="sizeNearV"></span><input type="range" id="sizeNear" min="0.15" max="0.7" step="0.01"></label>
+  <label>Shark scale when far <span id="scaleFarV"></span><input type="range" id="scaleFar" min="0.2" max="1" step="0.01"></label>
+  <label>Shark scale when near <span id="scaleNearV"></span><input type="range" id="scaleNear" min="0.5" max="1.6" step="0.01"></label>
+
+  <div class="sub">Steadiness</div>
+  <label>Frames before shark appears <span id="appearV"></span><input type="range" id="appear" min="1" max="30" step="1"></label>
+  <label>Frames to hold through a dropout <span id="holdV"></span><input type="range" id="hold" min="1" max="45" step="1"></label>
+  <label>min-confidence (rebuilds tracker) <span id="confV"></span><input type="range" id="conf" min="0.3" max="0.9" step="0.05"></label>
+
+  <div class="sub">Jaws (mouth open)</div>
+  <label>Mouth-open dead zone <span id="gapeDeadV"></span><input type="range" id="gapeDead" min="0" max="0.5" step="0.01"></label>
+  <label>Mouth-open for full chomp <span id="gapeFullV"></span><input type="range" id="gapeFull" min="0.2" max="0.9" step="0.01"></label>
+  <label><input type="checkbox" id="autoChomp"> Auto-chomp when the face can't be read</label>
+
+  <hr>
+  <button id="reset">Reset settings to defaults</button>
+  <p class="help">Settings save in this browser. F = fullscreen · D = this panel · H = hide cursor.</p>
+</div>
+
+<script type="module">
+// MediaPipe loads lazily so the ocean (and demo) still run if the CDN is unreachable
+const MP_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs";
+let MP = null;
+
+const W = 1920, H = 1080;                 // output canvas
+const ART_W = 1672, ART_H = 941;          // every part shares this canvas (docs/handoff.md)
+const ART_CX = 836, ART_CY = 470;
+const MODEL_URLS = {
+  lite:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  heavy: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+};
+const FACE_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const VIS_KEY = [0, 11, 12, 23, 24];      // nose, shoulders, hips: same gate as the spike
+
+// ---- settings (persisted per browser) --------------------------------------
+const DEFAULTS = {
+  model: "full", mirror: true, showCam: false,
+  xMin: 0.08, xMax: 0.92, yPos: 0.5,
+  sizeFar: 0.10, sizeNear: 0.34, scaleFar: 0.45, scaleNear: 1.05,
+  // appear after 0.4s, hold through 0.33s gaps: zero blinks / phantoms on the test clips
+  appear: 12, hold: 10, conf: 0.6,
+  gapeDead: 0.15, gapeFull: 0.5, autoChomp: true,
+  camId: "",
+};
+const cfg = { ...DEFAULTS };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem("jaws-config") || "{}")); } catch (e) {}
+function saveCfg() { try { localStorage.setItem("jaws-config", JSON.stringify(cfg)); } catch (e) {} }
+
+const els = id => document.getElementById(id);
+const canvas = els("out"), video = els("src");
+
+// ---- small helpers -----------------------------------------------------------
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth01 = t => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
+const deg = Math.PI / 180;
+// exponential approach with time constant tau (seconds)
+const follow = (cur, target, dt, tau) => cur + (target - cur) * (1 - Math.exp(-dt / tau));
+
+class LowPass { constructor() { this.s = null; } f(x, a) { this.s = this.s == null ? x : a * x + (1 - a) * this.s; return this.s; } }
+class OneEuro {
+  constructor(minCutoff = 1.0, beta = 0.007, dCutoff = 1.0) {
+    this.mc = minCutoff; this.beta = beta; this.dc = dCutoff;
+    this.x = new LowPass(); this.dx = new LowPass(); this.tp = null; this.xp = null;
+  }
+  a(c, dt) { const tau = 1 / (2 * Math.PI * c); return 1 / (1 + tau / dt); }
+  f(x, t) {
+    const dt = this.tp == null ? 1 / 30 : Math.max((t - this.tp) / 1000, 1e-4); this.tp = t;
+    const dx = this.xp == null ? 0 : (x - this.xp) / dt; this.xp = x;
+    const edx = this.dx.f(dx, this.a(this.dc, dt));
+    return this.x.f(x, this.a(this.mc + this.beta * Math.abs(edx), dt));
+  }
+  reset() { this.x.s = this.dx.s = null; this.tp = this.xp = null; }
+}
+
+// 2D affine as [a, b, c, d, e, f]: x' = a*x + c*y + e, y' = b*x + d*y + f (canvas convention)
+const I = [1, 0, 0, 1, 0, 0];
+const mul = (m, n) => [
+  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+];
+const T = (x, y) => [1, 0, 0, 1, x, y];
+const S = (sx, sy) => [sx, 0, 0, sy, 0, 0];
+// rotate counter-clockwise ON SCREEN (y-down) by a degrees: the handoff's "CCW" convention
+const R = a => { const c = Math.cos(a * deg), s = Math.sin(a * deg); return [c, -s, s, c, 0, 0]; };
+const Rabout = (px, py, a) => mul(T(px, py), mul(R(a), T(-px, -py)));
+// affine (output px) -> column-major mat3 in clip space
+function toClip(m) {
+  const sx = 2 / W, sy = -2 / H;
+  return new Float32Array([
+    m[0] * sx, m[1] * sy, 0,
+    m[2] * sx, m[3] * sy, 0,
+    m[4] * sx - 1, m[5] * sy + 1, 1,
+  ]);
+}
+
+// ---- WebGL -------------------------------------------------------------------
+const gl = canvas.getContext("webgl", { alpha: false, antialias: true, premultipliedAlpha: true, preserveDrawingBuffer: false });
+
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+// Ocean: procedural so it loops forever with no seam and costs no download.
+// Deep vertical gradient, swaying god rays, caustics near the surface, drifting marine snow.
+const oceanProg = program(`
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`, `
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + 1.0), f.x), f.y);
+}
+float caustic(vec2 uv, float t) {
+  // the classic formula needs coordinates far from zero or 1/length() explodes
+  vec2 p = mod(uv * 6.28318, 6.28318) - 250.0;
+  vec2 i = p; float c = 1.0; const float inten = 0.005;
+  for (int n = 0; n < 4; n++) {
+    float tt = t * (1.0 - (3.5 / float(n + 1)));
+    i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+    c += 1.0 / length(vec2(p.x / (sin(i.x + tt) / inten), p.y / (cos(i.y + tt) / inten)));
+  }
+  c /= 4.0; c = 1.17 - pow(c, 1.4);
+  return clamp(pow(abs(c), 8.0), 0.0, 1.0);
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;          // y up: 1.0 is the surface
+  vec2 p = uv; p.x *= uRes.x / uRes.y;
+  float t = uTime;
+
+  vec3 deep = vec3(0.004, 0.022, 0.045), mid = vec3(0.012, 0.085, 0.15), top = vec3(0.05, 0.24, 0.33);
+  vec3 col = mix(deep, mid, smoothstep(0.0, 0.75, uv.y));
+  col = mix(col, top, smoothstep(0.62, 1.0, uv.y));
+  // slow murk so big flat areas never look like a gradient fill
+  col *= 0.85 + 0.3 * noise(p * 1.6 + vec2(t * 0.02, -t * 0.015));
+
+  float rays = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    float a = p.x * (5.0 + fk * 2.7) + (1.0 - uv.y) * (1.2 + fk * 0.6);
+    rays += pow(0.5 + 0.5 * sin(a + t * (0.13 + 0.05 * fk) + fk * 1.7), 7.0 + fk * 3.0);
+  }
+  rays *= smoothstep(0.15, 1.0, uv.y) * 0.11;
+  col += vec3(0.32, 0.58, 0.66) * rays;
+
+  float c = caustic(p * 0.6 + vec2(0.0, t * 0.004), t * 0.3 + 23.0);
+  col += vec3(0.18, 0.42, 0.48) * c * smoothstep(0.6, 1.0, uv.y) * 0.32;
+
+  for (int L = 0; L < 3; L++) {               // marine snow, three parallax layers drifting down
+    float fl = float(L);
+    float sc = 16.0 + fl * 13.0;
+    vec2 q = p * sc + vec2(t * (0.06 + 0.03 * fl), t * (0.1 + 0.05 * fl));
+    vec2 id = floor(q); vec2 f = fract(q) - 0.5;
+    vec2 o = vec2(hash(id + 3.1), hash(id + 5.7)) - 0.5;
+    float d = length(f - o * 0.7);
+    float s = smoothstep(0.07 - 0.018 * fl, 0.0, d) * step(0.8, hash(id + fl * 7.0));
+    col += vec3(0.45, 0.62, 0.68) * s * (0.22 - 0.05 * fl);
+  }
+
+  float v = smoothstep(1.3, 0.35, length((uv - 0.5) * vec2(1.15, 1.0)));
+  col *= mix(0.5, 1.0, v);
+  gl_FragColor = vec4(col, 1.0);
+}
+`);
+const oceanBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, oceanBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+const spriteProg = program(`
+attribute vec2 aPos;      // art-canvas px
+attribute vec2 aUV;
+uniform mat3 uM;
+varying vec2 vUV;
+void main() { vUV = aUV; vec3 p = uM * vec3(aPos, 1.0); gl_Position = vec4(p.xy, 0.0, 1.0); }
+`, `
+precision mediump float;
+uniform sampler2D uTex;
+uniform vec3 uTint;
+uniform float uAlpha;
+varying vec2 vUV;
+void main() { vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb * uTint, c.a) * uAlpha; }
+`);
+const sp = {
+  aPos: gl.getAttribLocation(spriteProg, "aPos"), aUV: gl.getAttribLocation(spriteProg, "aUV"),
+  uM: gl.getUniformLocation(spriteProg, "uM"), uTex: gl.getUniformLocation(spriteProg, "uTex"),
+  uTint: gl.getUniformLocation(spriteProg, "uTint"), uAlpha: gl.getUniformLocation(spriteProg, "uAlpha"),
+};
+const op = { aPos: gl.getAttribLocation(oceanProg, "aPos"), uRes: gl.getUniformLocation(oceanProg, "uRes"),
+  uTime: gl.getUniformLocation(oceanProg, "uTime") };
+
+// a quad over just the part's opaque bounding box (fewer wasted fragments than the full canvas)
+function quadMesh(b) {
+  const [x0, y0, x1, y1] = b;
+  const pos = [x0, y0, x1, y0, x0, y1, x1, y0, x1, y1, x0, y1];
+  const uv = pos.map((v, i) => i % 2 ? v / ART_H : v / ART_W);
+  return mesh(new Float32Array(pos), new Float32Array(uv), gl.STATIC_DRAW);
+}
+function mesh(pos, uv, usage) {
+  const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, pos, usage);
+  const ub = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ub); gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+  return { pb, ub, n: pos.length / 2, pos };
+}
+
+// Pectoral fin bend: each vertex rotates about the pivot by maxAngle*(root + (1-root)*s^ease),
+// s = normalised distance along base->tip, first `hold` of the length rigid. (docs/handoff.md)
+// root at the low end of the handoff's 0.20-0.85: more lifts the fin's base off the body
+const FIN = { ease: 0.75, root: 0.20, hold: 0.10, min: -20, max: 60, grid: 14 };
+function finMesh(b, pivot, tip) {
+  const [x0, y0, x1, y1] = b, g = FIN.grid;
+  const ax = tip[0] - pivot[0], ay = tip[1] - pivot[1], L = Math.hypot(ax, ay);
+  const verts = [];   // rest positions + s
+  for (let j = 0; j <= g; j++) for (let i = 0; i <= g; i++) {
+    const x = lerp(x0, x1, i / g), y = lerp(y0, y1, j / g);
+    const s = clamp(((x - pivot[0]) * ax + (y - pivot[1]) * ay) / (L * L), 0, 1);
+    verts.push([x, y, s]);
+  }
+  const idx = [];
+  for (let j = 0; j < g; j++) for (let i = 0; i < g; i++) {
+    const a = j * (g + 1) + i, b2 = a + 1, c = a + g + 1, d = c + 1;
+    idx.push(a, b2, c, b2, d, c);
+  }
+  const pos = new Float32Array(idx.length * 2), uv = new Float32Array(idx.length * 2);
+  idx.forEach((k, n) => { pos[2 * n] = verts[k][0]; pos[2 * n + 1] = verts[k][1];
+    uv[2 * n] = verts[k][0] / ART_W; uv[2 * n + 1] = verts[k][1] / ART_H; });
+  const m = mesh(pos, uv, gl.DYNAMIC_DRAW);
+  m.verts = verts; m.idx = idx; m.pivot = pivot; m.work = new Float32Array(pos.length);
+  return m;
+}
+function bendFin(m, angle) {
+  const [px, py] = m.pivot, out = m.work;
+  m.idx.forEach((k, n) => {
+    const [x, y, s] = m.verts[k];
+    const s2 = s <= FIN.hold ? 0 : (s - FIN.hold) / (1 - FIN.hold);
+    const a = angle * (FIN.root + (1 - FIN.root) * Math.pow(s2, FIN.ease)) * deg;
+    const c = Math.cos(a), sn = Math.sin(a), dx = x - px, dy = y - py;
+    out[2 * n] = px + dx * c + dy * sn;          // CCW on screen
+    out[2 * n + 1] = py - dx * sn + dy * c;
+  });
+  gl.bindBuffer(gl.ARRAY_BUFFER, m.pb); gl.bufferSubData(gl.ARRAY_BUFFER, 0, out);
+}
+
+// parts, back to front, with the opaque bounding boxes of the cleaned art (padded a little)
+const PARTS = [
+  { name: "Pectoral_Fin_Rear",   box: [500, 515, 790, 800], fin: "far" },
+  { name: "Tail_Fin",            box: [1370, 235, 1660, 680] },
+  { name: "Blank_Body",          box: [270, 285, 1530, 665] },
+  { name: "Dorsal_Fin",          box: [640, 140, 885, 368] },
+  { name: "Black_part_of_mouth", box: [115, 400, 392, 665] },
+  { name: "Lower_Jaw",           box: [100, 400, 560, 720] },
+  { name: "Upper_Jaw",           box: [20, 260, 715, 560] },
+  { name: "Pectoral_Fin",        box: [460, 515, 750, 800], fin: "near" },
+];
+const NEAR = { pivot: [571, 556], tip: [724, 781] };
+const FAR = { pivot: [611, 556], tip: [764, 781] };    // near fin + 40px in x
+const tex = {}, meshes = {};
+
+async function loadArt() {
+  await Promise.all(PARTS.map(async p => {
+    const img = new Image(); img.src = `art/${p.name}.png`;
+    await img.decode();
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    tex[p.name] = t;
+  }));
+}
+function buildMeshes() {
+  for (const p of PARTS) meshes[p.name] = p.fin === "near" ? finMesh(p.box, NEAR.pivot, NEAR.tip)
+    : p.fin === "far" ? finMesh(p.box, FAR.pivot, FAR.tip) : quadMesh(p.box);
+}
+
+function drawPart(name, m, tint, alpha) { drawMesh(meshes[name], tex[name], m, tint, alpha); }
+function drawMesh(ms, texture, m, tint, alpha) {
+  gl.uniformMatrix3fv(sp.uM, false, toClip(m));
+  gl.uniform3fv(sp.uTint, tint); gl.uniform1f(sp.uAlpha, alpha);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.bindBuffer(gl.ARRAY_BUFFER, ms.pb); gl.vertexAttribPointer(sp.aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, ms.ub); gl.vertexAttribPointer(sp.aUV, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, ms.n);
+}
+
+// While a shark fades in or out it's drawn to this offscreen layer first and the layer is
+// faded, so overlapping parts don't turn see-through (fins showing through the body).
+const layer = (() => {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // full-output quad; framebuffer textures are bottom-up, so v is flipped
+  const quad = mesh(new Float32Array([0, 0, W, 0, 0, H, W, 0, W, H, 0, H]),
+    new Float32Array([0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0]), gl.STATIC_DRAW);
+  return { t, fb, quad };
+})();
+
+// ---- one shark per tracked person ---------------------------------------------
+const TINTS = [[1, 1, 1], [0.93, 0.98, 1.08]];        // second shark nudged bluer (handoff)
+class Shark {
+  constructor(slot) {
+    this.slot = slot; this.fx = new OneEuro(0.8, 0.004); this.fs = new OneEuro(0.6, 0.5);
+    this.reset();
+    this.phase = Math.random() * 10; this.tailPhase = 0;
+  }
+  reset() {
+    this.seenRun = 0; this.missRun = 0; this.active = false; this.alpha = 0;
+    this.obs = null; this.lastX = null; this.fx.reset(); this.fs.reset();
+    this.x = W / 2; this.scale = 0.6; this.y = H * cfg.yPos;
+    this.facing = -1; this.flip = -1; this.second = false; this.dirTime = 0; this.vx = 0;
+    this.finN = 0; this.finF = 0; this.finNT = null; this.finFT = null;
+    this.gape = 0; this.gapeT = 0; this.faceSeen = -1e9; this.chompAt = 0; this.jawHist = [];
+  }
+  // called once per tracker update with this slot's person (or null)
+  observe(o, t) {
+    if (o) {
+      this.seenRun++; this.missRun = 0; this.obs = o; this.lastX = o.x;
+      if (!this.active && this.seenRun >= cfg.appear) {
+        this.active = true; this.fx.reset(); this.fs.reset();
+        // whoever shows up second gets the second-shark look, whichever slot they landed in
+        this.second = sharks.some(s => s !== this && s.active);
+        this.x = this.targetX(o.x); this.scale = this.targetScale(o.size);
+      }
+      if (o.armN != null) this.finNT = o.armN;
+      if (o.armF != null) this.finFT = o.armF;
+      if (o.jaw != null) {
+        // jawOpen flickers read to read (0.56, 0, 0.40...): hold the max of the last 0.25s
+        this.jawHist.push([t, o.jaw]);
+        while (this.jawHist.length && t - this.jawHist[0][0] > 0.25) this.jawHist.shift();
+        this.gapeT = Math.max(...this.jawHist.map(h => h[1])); this.faceSeen = t;
+      }
+    } else {
+      this.missRun++; this.seenRun = 0;
+      if (this.active && this.missRun >= cfg.hold) this.active = false;
+      if (!this.active && this.missRun >= cfg.hold) this.obs = null;
+    }
+  }
+  targetX(xn) { return lerp(W * 0.08, W * 0.92, clamp((xn - cfg.xMin) / (cfg.xMax - cfg.xMin), 0, 1)); }
+  targetScale(size) {
+    const k = clamp((size - cfg.sizeFar) / (cfg.sizeNear - cfg.sizeFar), 0, 1);
+    return lerp(cfg.scaleFar, cfg.scaleNear, k) * (this.second ? 0.9 : 1);
+  }
+  // dt is capped for animation; realDt is the true frame gap, so a slow frame can't fake speed
+  update(dt, t, others, realDt) {
+    const o = this.obs, ms = t * 1000;
+    if (this.active && o) {
+      const px = this.x;
+      this.x = this.fx.f(this.targetX(o.x), ms);
+      this.scale = this.fs.f(this.targetScale(o.size), ms);
+      this.vx = follow(this.vx, (this.x - px) / Math.max(realDt, 1e-3), realDt, 0.15);
+    } else if (this.alpha > 0) {
+      this.x += this.facing * 260 * dt;                 // swim off the way it was heading
+    }
+    this.alpha = follow(this.alpha, this.active ? 1 : 0, dt, this.active ? 0.15 : 0.25);
+    if (!this.active && this.alpha < 0.01) this.alpha = 0;
+
+    // two sharks: spread vertically so they don't sit on top of each other
+    const both = others.some(s => s !== this && s.alpha > 0.05);
+    const yT = H * cfg.yPos + (both ? (this.second ? 1 : -1) * H * 0.12 : 0);
+    this.y = follow(this.y, yT, dt, 0.6);
+
+    // direction flip with hysteresis: ~0.5s of consistent travel (art faces left = -1)
+    const dir = this.vx > 70 ? 1 : this.vx < -70 ? -1 : 0;
+    if (dir && dir !== this.facing) { this.dirTime += dt; if (this.dirTime > 0.5) { this.facing = dir; this.dirTime = 0; } }
+    else this.dirTime = 0;
+    this.flip = follow(this.flip, this.facing, dt, 0.09);
+
+    // fins: arm angle when seen, hold the last value through dropouts, idle flap otherwise
+    const idle = 10 * Math.sin(2 * Math.PI * t / 3.2 + this.phase);
+    const idleFar = 10 * Math.sin(2 * Math.PI * (t / 3.2 - 0.06) + this.phase);   // far fin lags ~6%
+    const nT = this.finNT != null && this.active ? this.finNT : idle;
+    const fT = this.finFT != null && this.active ? this.finFT : idleFar;
+    this.finN = follow(this.finN, nT, dt, 0.08);
+    this.finF = follow(this.finF, fT, dt, 0.11);
+
+    // jaws: face when readable; otherwise an occasional chomp so a still shark isn't dead
+    let g = this.gapeT;
+    if (t - this.faceSeen > 1.0) {
+      g = 0;
+      if (cfg.autoChomp) {
+        if (t > this.chompAt + 0.5) { if (Math.random() < dt / 3.5) this.chompAt = t; }
+        const ct = t - this.chompAt; if (ct < 0.5) g = Math.sin(Math.PI * ct / 0.5);
+      }
+    }
+    this.gape = follow(this.gape, g, dt, g > this.gape ? 0.04 : 0.12);
+
+    // tail: beat speeds up with horizontal speed, slow sway when still
+    const spd = clamp(Math.abs(this.vx) / 500, 0, 1);
+    this.tailPhase += dt * 2 * Math.PI * (0.35 + 1.6 * spd);
+    this.tailAmp = follow(this.tailAmp ?? 6, 6 + 8 * spd, dt, 0.4);
+  }
+  draw(t) {
+    if (this.alpha <= 0) return;
+    const ph = this.phase;
+    // idle: three sines at periods that never resync
+    const bob = 9 * Math.sin(2 * Math.PI * t / 3 + ph) + 5 * Math.sin(2 * Math.PI * t / 4.5 + ph * 2);
+    const tilt = 1.6 * Math.sin(2 * Math.PI * t / 7 + ph) + 0.8 * Math.sin(2 * Math.PI * t / 4.5 + ph);
+    const tail = this.tailAmp * Math.sin(this.tailPhase) + 2 * Math.sin(2 * Math.PI * t / 7 + ph);
+    const s = this.scale * (0.92 + 0.08 * this.alpha);
+    const sx = -this.flip;                  // art faces left; facing +1 (right) mirrors it
+    const M = mul(T(this.x, this.y + bob * s), mul(R(tilt * -this.flip), mul(S(sx * s, s), T(-ART_CX, -ART_CY))));
+    const tint = TINTS[this.second ? 1 : 0], fading = this.alpha < 0.995, a = 1;
+    if (fading) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, layer.fb);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    const gp = clamp(this.gape, 0, 1);      // never past 1.0: background leaks at ~1.35
+
+    bendFin(meshes.Pectoral_Fin_Rear, this.finF);
+    bendFin(meshes.Pectoral_Fin, this.finN);
+    drawPart("Pectoral_Fin_Rear", M, tint, a);
+    drawPart("Tail_Fin", mul(M, Rabout(1395, 455, tail)), tint, a);
+    drawPart("Blank_Body", M, tint, a);
+    drawPart("Dorsal_Fin", M, tint, a);
+    // the blob pokes out below the closed jaw (art open item), so fade it in with the gape
+    drawPart("Black_part_of_mouth", M, tint, a * smooth01(gp / 0.25));
+    drawPart("Lower_Jaw", mul(M, Rabout(402.2, 563.7, 25.0 * gp)), tint, a);
+    drawPart("Upper_Jaw", mul(M, Rabout(577.1, 115.8, -6.0 * gp)), tint, a);
+    drawPart("Pectoral_Fin", M, tint, a);
+    if (fading) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      drawMesh(layer.quad, layer.t, I, [1, 1, 1], this.alpha);
+    }
+  }
+}
+const sharks = [new Shark(0), new Shark(1)];
+window.jaws = { sharks, cfg, pin: null };
+
+// ---- tracking ------------------------------------------------------------------
+let fileset = null, pose = null, face = null, stream = null, fileUrl = null, fileName = "";
+let mode = "none";   // camera | file | demo
+let lastVideoTime = -1, trackTs = [], renderTs = [], seenCount = 0;
+const faceCanvas = document.createElement("canvas"); faceCanvas.width = faceCanvas.height = 256;
+const faceCtx = faceCanvas.getContext("2d", { willReadFrequently: false });
+let faceTurn = 0;
+
+async function buildTrackers() {
+  MP ||= await import(MP_URL);
+  const { FilesetResolver, PoseLandmarker, FaceLandmarker } = MP;
+  if (!fileset) fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm");
+  if (pose) { pose.close(); pose = null; }
+  const popts = d => ({ baseOptions: { modelAssetPath: MODEL_URLS[cfg.model], delegate: d }, runningMode: "VIDEO",
+    numPoses: 2, minPoseDetectionConfidence: cfg.conf, minPosePresenceConfidence: cfg.conf, minTrackingConfidence: cfg.conf });
+  try { pose = await PoseLandmarker.createFromOptions(fileset, popts("GPU")); }
+  catch (e) { pose = await PoseLandmarker.createFromOptions(fileset, popts("CPU")); }
+  if (!face) {
+    const fopts = d => ({ baseOptions: { modelAssetPath: FACE_URL, delegate: d }, runningMode: "IMAGE",
+      numFaces: 1, outputFaceBlendshapes: true, minFaceDetectionConfidence: 0.4, minFacePresenceConfidence: 0.4 });
+    try { face = await FaceLandmarker.createFromOptions(fileset, fopts("GPU")); }
+    catch (e) {
+      try { face = await FaceLandmarker.createFromOptions(fileset, fopts("CPU")); } catch (e2) { face = null; }
+    }
+  }
+}
+
+function vis(l) { return l && l.visibility != null ? l.visibility : 1; }
+// angle of an arm from hanging straight down (0) through sideways (90) to overhead (180)
+function armAngle(lm, sh, el, wr, vw, vh) {
+  const end = vis(lm[wr]) >= 0.5 ? lm[wr] : vis(lm[el]) >= 0.5 ? lm[el] : null;
+  if (!end || vis(lm[sh]) < 0.5) return null;
+  const dx = (end.x - lm[sh].x) * vw, dy = (end.y - lm[sh].y) * vh;
+  const len = Math.hypot(dx, dy); if (len < 1e-3) return null;
+  const a = Math.acos(clamp(dy / len, -1, 1)) / deg;
+  return lerp(FIN.min + 5, FIN.max, clamp(a / 150, 0, 1));     // arms down ~ -15, overhead = +60
+}
+
+// read jawOpen off a 256x256 crop around the head, so faces at walkway distance are big enough
+function readJaw(lm, vw, vh) {
+  if (!face || vis(lm[0]) < 0.5) return null;
+  const sh = Math.hypot((lm[11].x - lm[12].x) * vw, (lm[11].y - lm[12].y) * vh);
+  const ear = Math.hypot((lm[7].x - lm[8].x) * vw, (lm[7].y - lm[8].y) * vh);
+  const size = Math.max(ear * 3.0, sh * 0.9, 48);
+  const cx = lm[0].x * vw, cy = lm[0].y * vh + size * 0.08;
+  faceCtx.fillRect(0, 0, 256, 256);
+  faceCtx.drawImage(video, cx - size / 2, cy - size / 2, size, size, 0, 0, 256, 256);
+  let r = null;
+  try { r = face.detect(faceCanvas); } catch (e) { return null; }
+  const bs = r && r.faceBlendshapes && r.faceBlendshapes[0];
+  if (!bs) return null;
+  const j = bs.categories.find(c => c.categoryName === "jawOpen");
+  if (!j) return null;
+  // dead zone, then ramp fast: a small open = a big chomp, slightly open != ajar shark
+  return smooth01((j.score - cfg.gapeDead) / Math.max(cfg.gapeFull - cfg.gapeDead, 0.01));
+}
+
+function observe(lm, vw, vh, readFace) {
+  const sx = (lm[11].x + lm[12].x) / 2, sy = (lm[11].y + lm[12].y) / 2;
+  const hipsOk = vis(lm[23]) >= 0.5 && vis(lm[24]) >= 0.5;
+  const hx = (lm[23].x + lm[24].x) / 2, hy = (lm[23].y + lm[24].y) / 2;
+  const shW = Math.hypot((lm[11].x - lm[12].x) * vw, (lm[11].y - lm[12].y) * vh);
+  // torso height doesn't collapse when someone turns side-on the way shoulder width does
+  const torso = hipsOk ? Math.hypot((sx - hx) * vw, (sy - hy) * vh) : 0;
+  const size = Math.max(torso, shW * 1.5) / vh;
+  let x = hipsOk ? (sx + hx) / 2 : sx;
+  if (cfg.mirror) x = 1 - x;
+  // fins follow the arm on the shark's near side; swap when mirrored so it feels like a mirror
+  let a = armAngle(lm, 12, 14, 16, vw, vh), b = armAngle(lm, 11, 13, 15, vw, vh);
+  if (!cfg.mirror) [a, b] = [b, a];
+  return { x, size, armN: a, armF: b, jaw: readFace ? readJaw(lm, vw, vh) : null };
+}
+
+function assign(obs) {
+  // keep each person on the same shark: nearest previous x wins
+  const out = [null, null], used = new Set();
+  const live = sharks.filter(s => s.lastX != null && (s.obs || s.seenRun > 0 || s.active));
+  for (const s of live) {
+    let best = -1, bd = 0.25;
+    obs.forEach((o, i) => { if (!used.has(i)) { const d = Math.abs(o.x - s.lastX); if (d < bd) { bd = d; best = i; } } });
+    if (best >= 0) { out[s.slot] = obs[best]; used.add(best); }
+  }
+  obs.forEach((o, i) => {
+    if (used.has(i)) return;
+    const free = sharks.find(s => !out[s.slot] && !s.active && s.alpha === 0);
+    if (free) { out[free.slot] = o; used.add(i); }
+  });
+  return out;
+}
+
+function track(now) {
+  if (mode === "demo") return demoTrack(now);
+  if (!pose || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let res = null;
+  try { res = pose.detectForVideo(video, now); } catch (e) { return; }
+  trackTs.push(now); while (trackTs.length > 30) trackTs.shift();
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const people = (res.landmarks || []).filter(lm => VIS_KEY.reduce((s, k) => s + vis(lm[k]), 0) / VIS_KEY.length >= 0.5);
+  seenCount = people.length;
+  faceTurn = (faceTurn + 1) % 2;
+  // face crops alternate between people so two kids don't double the per-frame cost
+  const obs = people.map((lm, i) => observe(lm, vw, vh, people.length < 2 || i === faceTurn));
+  const t = now / 1000;
+  assign(obs).forEach((o, i) => sharks[i].observe(o, t));
+}
+
+// demo: a fake visitor so the page can be checked with no camera
+function demoTrack(now) {
+  if (now - (demoTrack.last || 0) < 33) return;
+  demoTrack.last = now;
+  trackTs.push(now); while (trackTs.length > 30) trackTs.shift();
+  const t = now / 1000;
+  const cyc = t % 24;
+  const present = cyc < 20;
+  const x = 0.5 + 0.38 * Math.sin(2 * Math.PI * t / 12);
+  const size = 0.12 + 0.2 * (0.5 + 0.5 * Math.sin(2 * Math.PI * t / 9));
+  const flap = 0.5 + 0.5 * Math.sin(2 * Math.PI * t / 2.4);
+  const chomp = Math.max(0, Math.sin(2 * Math.PI * t / 3.1)) ** 3;
+  let o = present ? { x, size, armN: lerp(-15, 60, flap), armF: lerp(-15, 60, 1 - flap), jaw: chomp } : null;
+  if (window.jaws.pin) o = window.jaws.pin;     // console/test hook: hold the fake visitor in one pose
+  seenCount = present ? 1 : 0;
+  sharks[0].observe(o, t); sharks[1].observe(null, t);
+}
+
+// ---- sources ---------------------------------------------------------------------
+function stopSource() {
+  if (stream) { stream.getTracks().forEach(tk => tk.stop()); stream = null; }
+  video.pause(); video.removeAttribute("src"); video.srcObject = null; video.load();
+  lastVideoTime = -1; sharks.forEach(s => s.reset());
+}
+async function startCamera() {
+  stopSource();
+  stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+    width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 },
+    ...(cfg.camId ? { deviceId: { exact: cfg.camId } } : {}) } });
+  video.srcObject = stream; await video.play();
+  mode = "camera"; await listCameras();
+  els("dSrc").textContent = stream.getVideoTracks()[0]?.label || "camera";
+}
+async function startFile() {
+  stopSource();
+  video.src = fileUrl; video.loop = true; await video.play();
+  mode = "file"; els("dSrc").textContent = fileName;
+}
+function startDemo() { stopSource(); mode = "demo"; els("dSrc").textContent = "demo"; }
+async function listCameras() {
+  const sel = els("cam");
+  try {
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    sel.innerHTML = "";
+    cams.forEach((c, i) => { const o = document.createElement("option"); o.value = c.deviceId;
+      o.textContent = c.label || `Camera ${i + 1}`; sel.appendChild(o); });
+    const cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+    if (cur) sel.value = cur;
+  } catch (e) {}
+}
+
+// ---- main loop -------------------------------------------------------------------
+let lastFrame = performance.now(), t0 = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const realDt = Math.max((now - lastFrame) / 1000, 1e-3), dt = Math.min(realDt, 0.1); lastFrame = now;
+  const t = (now - t0) / 1000;
+  renderTs.push(now); while (renderTs.length > 60) renderTs.shift();
+  track(now);
+  for (const s of sharks) s.update(dt, t, sharks, realDt);
+
+  gl.viewport(0, 0, W, H);
+  gl.disable(gl.BLEND);
+  gl.useProgram(oceanProg);
+  gl.uniform2f(op.uRes, W, H); gl.uniform1f(op.uTime, t);
+  gl.bindBuffer(gl.ARRAY_BUFFER, oceanBuf);
+  gl.enableVertexAttribArray(op.aPos); gl.vertexAttribPointer(op.aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.disableVertexAttribArray(op.aPos);
+
+  gl.useProgram(spriteProg);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.enableVertexAttribArray(sp.aPos); gl.enableVertexAttribArray(sp.aUV);
+  gl.activeTexture(gl.TEXTURE0); gl.uniform1i(sp.uTex, 0);
+  // farther (smaller) shark first so the near one overlaps it
+  [...sharks].sort((a, b) => a.scale - b.scale).forEach(s => s.draw(t));
+  gl.disableVertexAttribArray(sp.aPos); gl.disableVertexAttribArray(sp.aUV);
+
+  if (cfg.showCam && mode !== "demo" && video.readyState >= 2) drawInset();
+  if (now - (frame.hud || 0) > 250) { frame.hud = now; hud(); }
+}
+
+// testing aid: camera thumbnail in the corner (2D canvas over the GL one)
+const inset = document.createElement("canvas");
+inset.style.cssText = "position:absolute;right:12px;bottom:12px;width:320px;border:1px solid #fff4;z-index:4;display:none";
+document.body.appendChild(inset);
+function drawInset() {
+  inset.style.display = "block";
+  inset.width = 320; inset.height = Math.round(320 * video.videoHeight / video.videoWidth);
+  const c = inset.getContext("2d"); c.save();
+  if (cfg.mirror) { c.translate(inset.width, 0); c.scale(-1, 1); }
+  c.drawImage(video, 0, 0, inset.width, inset.height); c.restore();
+}
+
+const rate = b => b.length >= 2 ? (b.length - 1) / ((b[b.length - 1] - b[0]) / 1000) : 0;
+function hud() {
+  if (!cfg.showCam || mode === "demo") inset.style.display = "none";
+  if (!els("debug").classList.contains("show")) return;
+  els("dRender").textContent = `${rate(renderTs).toFixed(0)} fps`;
+  els("dTrack").textContent = mode === "demo" ? "demo" : `${rate(trackTs).toFixed(0)} fps`;
+  els("dPeople").textContent = `${seenCount} / ${sharks.filter(s => s.active).length}`;
+  sharks.forEach((s, i) => els(`dS${i}`).textContent = s.alpha > 0
+    ? `${s.scale.toFixed(2)} · ${s.gape.toFixed(2)} · ${s.finN.toFixed(0)}°/${s.finF.toFixed(0)}°` : "--");
+}
+
+// ---- layout + controls --------------------------------------------------------------
+function fit() {
+  const k = Math.min(innerWidth / W, innerHeight / H);
+  canvas.style.width = `${W * k}px`; canvas.style.height = `${H * k}px`;
+}
+addEventListener("resize", fit); fit();
+
+const SLIDERS = { xMin: 2, xMax: 2, yPos: 2, sizeFar: 2, sizeNear: 2, scaleFar: 2, scaleNear: 2,
+  appear: 0, hold: 0, conf: 2, gapeDead: 2, gapeFull: 2 };
+function syncControls() {
+  for (const [k, dp] of Object.entries(SLIDERS)) { els(k).value = cfg[k]; els(k + "V").textContent = Number(cfg[k]).toFixed(dp); }
+  els("model").value = cfg.model; els("mirror").checked = cfg.mirror;
+  els("showCam").checked = cfg.showCam; els("autoChomp").checked = cfg.autoChomp;
+}
+for (const [k, dp] of Object.entries(SLIDERS)) {
+  els(k).addEventListener("input", () => { cfg[k] = parseFloat(els(k).value); els(k + "V").textContent = cfg[k].toFixed(dp); saveCfg(); });
+}
+// rebuilding swaps the pose tracker in place; the face tracker is kept
+const rebuild = () => { if (trackersReady) trackersReady = buildTrackers().catch(e => { trackersReady = null; console.error(e); }); };
+els("conf").addEventListener("change", rebuild);
+els("model").addEventListener("change", () => { cfg.model = els("model").value; saveCfg(); rebuild(); });
+els("mirror").addEventListener("change", () => { cfg.mirror = els("mirror").checked; saveCfg(); });
+els("showCam").addEventListener("change", () => { cfg.showCam = els("showCam").checked; saveCfg(); });
+els("autoChomp").addEventListener("change", () => { cfg.autoChomp = els("autoChomp").checked; saveCfg(); });
+els("cam").addEventListener("change", async () => { cfg.camId = els("cam").value; saveCfg(); await go(startCamera); });
+els("reset").addEventListener("click", () => { Object.assign(cfg, DEFAULTS); saveCfg(); syncControls(); rebuild(); });
+els("fileBtn").addEventListener("click", () => els("file").click());
+els("startFile").addEventListener("click", () => els("file").click());
+els("demoBtn").addEventListener("click", () => go(async () => startDemo(), false));
+els("startDemo").addEventListener("click", () => go(async () => startDemo(), false));
+els("startCam").addEventListener("click", () => go(startCamera));
+els("file").addEventListener("change", () => {
+  const f = els("file").files[0]; if (!f) return;
+  if (fileUrl) URL.revokeObjectURL(fileUrl);
+  fileUrl = URL.createObjectURL(f); fileName = f.name; els("file").value = "";
+  go(startFile);
+});
+addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "d" || e.key === "D") els("debug").classList.toggle("show");
+  if (e.key === "f" || e.key === "F") {
+    if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+  }
+  if (e.key === "h" || e.key === "H") document.body.classList.toggle("hide-cursor");
+});
+canvas.addEventListener("dblclick", () => document.documentElement.requestFullscreen().catch(() => {}));
+
+let trackersReady = null;
+async function go(startFn, needTrackers = true) {
+  els("startErr").textContent = "";
+  try {
+    if (needTrackers) {
+      trackersReady ||= buildTrackers().catch(e => { trackersReady = null; throw e; });
+      await trackersReady;
+    }
+    await startFn();
+    els("start").classList.add("hidden");
+  } catch (e) {
+    els("startErr").textContent = "Couldn't start: " + (e?.message || e);
+    els("start").classList.remove("hidden");
+    console.error(e);
+  }
+}
+
+syncControls();
+await loadArt(); buildMeshes();
+requestAnimationFrame(frame);
+// unattended start: ?demo runs the fake visitor; otherwise go straight to the camera if allowed
+const q = new URLSearchParams(location.search);
+if (q.has("demo")) { startDemo(); els("start").classList.add("hidden"); }
+else go(startCamera);
+</script>
+</body>
+</html>
