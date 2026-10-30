@@ -75,6 +75,11 @@ plain USB-UVC webcam, compared against this RTSP baseline using the spike's lag 
   → spike Camera dropdown = "OBS Virtual Camera". Works, but adds delay. Set OBS canvas to
   720p/30–60 (Settings → Video) since the virtual cam inherits the canvas.
 
+- **Recorded clip:** "Load video file…" on the splash (or "Video file…" in the controls bar)
+  runs a local video through the same tracker, looping, with the skeleton overlaid. Good for
+  comparing camera angles, misfires and jitter offline; tracking fps is capped by the clip's
+  frame rate, so don't read the fps gate off a file. Picking a camera returns to live mode.
+
 ## Anti-misfire recipe (empty walkway must show NO shark)
 Raise min-confidence (0.7–0.75) + visibility gate (0.6–0.7) until an empty frame reliably
 reads 0 poses, then confirm a real person still locks instantly. This is critical for the
