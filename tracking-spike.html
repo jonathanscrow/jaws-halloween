@@ -126,6 +126,7 @@
 
   <div id="controls" class="hidden">
     <label>Camera<select id="cam"></select></label>
+    <button id="fileBtn2">Video file…</button>
     <label>Capture
       <select id="res">
         <option value="1280x720" selected>720p (fast)</option>
@@ -180,6 +181,11 @@
        matters for the real shark. Grant camera access when asked; serve over
        localhost or https.</p>
     <button id="start" class="primary" style="font-size:16px;padding:12px 22px;">Start camera</button>
+    <button id="fileBtn" style="font-size:16px;padding:12px 22px;">Load video file…</button>
+    <input type="file" id="file" accept="video/*" hidden>
+    <p style="font-size:13px;opacity:.8">A recorded clip runs through the same tracker, looping, with the
+       skeleton drawn over it. Fine for comparing angles, misfires and jitter; tracking fps is
+       capped by the clip's own frame rate.</p>
     <p id="splashErr" style="color:var(--bad)"></p>
   </div>
 </div>
@@ -207,6 +213,7 @@ const video = els("video"), canvas = els("overlay"), ctx = canvas.getContext("2d
 
 let landmarker = null, fileset = null, stream = null;
 let running = false, lastVideoTime = -1, rafId = null;
+let fileUrl = null, fileName = "";   // set when a recorded clip is the source instead of a camera
 
 // ---- One-Euro filter -------------------------------------------------------
 class LowPass {
@@ -271,6 +278,16 @@ async function listCameras() {
 }
 async function startCamera() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (fileUrl) {
+    // recorded clip: loop it so the gates keep reading; muted so autoplay is allowed
+    video.srcObject = null; video.src = fileUrl; video.loop = true;
+    await video.play();
+    await new Promise(r => { if (video.videoWidth) return r(); video.onloadedmetadata = () => r(); });
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    els("vres").textContent = `${video.videoWidth}×${video.videoHeight} · ${fileName}`;
+    return;
+  }
+  video.removeAttribute("src"); video.loop = false;
   const [w, h] = els("res").value.split("x").map(Number);
   const camId = els("cam").value;
   stream = await navigator.mediaDevices.getUserMedia({
@@ -463,7 +480,7 @@ function markGate(gateId, vId, pass, label) {
 // ---- boot / controls -------------------------------------------------------
 async function boot() {
   els("splashErr").textContent = "";
-  try { await startCamera(); await listCameras(); await buildLandmarker(); }
+  try { await startCamera(); if (!fileUrl) await listCameras(); await buildLandmarker(); }
   catch (e) { els("splashErr").textContent = "Init failed: " + (e?.message || e); console.error(e); return; }
   els("splash").classList.add("hidden");
   els("hud").classList.remove("hidden");
@@ -483,7 +500,17 @@ async function reapply() {
 
 els("start").addEventListener("click", boot);
 els("apply").addEventListener("click", reapply);
-els("cam").addEventListener("change", reapply);
+els("cam").addEventListener("change", () => { fileUrl = null; reapply(); }); // picking a camera leaves file mode
+els("fileBtn").addEventListener("click", () => els("file").click());
+els("fileBtn2").addEventListener("click", () => els("file").click());
+els("file").addEventListener("change", () => {
+  const f = els("file").files[0];
+  if (!f) return;
+  if (fileUrl) URL.revokeObjectURL(fileUrl);
+  fileUrl = URL.createObjectURL(f); fileName = f.name;
+  els("file").value = "";  // so re-picking the same clip still fires change
+  if (running) reapply(); else boot();
+});
 els("mc").addEventListener("input", () => els("mcv").textContent = parseFloat(els("mc").value).toFixed(1));
 els("beta").addEventListener("input", () => els("bv").textContent = parseFloat(els("beta").value).toFixed(3));
 els("vis").addEventListener("input", () => els("visv").textContent = parseFloat(els("vis").value).toFixed(2)); // live
