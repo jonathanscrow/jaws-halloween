@@ -40,6 +40,9 @@
     background: #2d7ff9; color: #fff; min-width: 220px; }
   #start button.alt { background: #26313b; }
   #start p { max-width: 520px; color: #c5ced8; margin: 0; }
+  #startCamWrap { display: flex; flex-direction: column; gap: 6px; color: #c5ced8; min-width: 220px; }
+  #startCamWrap[hidden] { display: none; }
+  #startCamSel { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #ffffff33; background: #1b232b; color: #e8edf2; }
   #startErr { color: #ff8a8a; }
 </style>
 </head>
@@ -51,6 +54,7 @@
 <div id="start">
   <h2 style="margin:0">JAWS</h2>
   <p>Camera in, shark out. Press <b>D</b> for the settings panel, <b>F</b> for fullscreen.</p>
+  <label id="startCamWrap" hidden>Camera<select id="startCamSel"></select></label>
   <button id="startCam">Start camera</button>
   <button id="startFile" class="alt">Load video file…</button>
   <button id="startDemo" class="alt">Demo (no camera)</button>
@@ -691,9 +695,15 @@ function stopSource() {
 }
 async function startCamera() {
   stopSource();
-  stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+  const ask = id => navigator.mediaDevices.getUserMedia({ audio: false, video: {
     width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 },
-    ...(cfg.camId ? { deviceId: { exact: cfg.camId } } : {}) } });
+    ...(id ? { deviceId: { exact: id } } : {}) } });
+  try { stream = await ask(cfg.camId); }
+  catch (e) {
+    // a saved camera that's been unplugged: fall back to the default one
+    if (!cfg.camId || !["OverconstrainedError", "NotFoundError"].includes(e?.name)) throw e;
+    cfg.camId = ""; saveCfg(); stream = await ask("");
+  }
   video.srcObject = stream; await video.play();
   mode = "camera"; await listCameras();
   els("dSrc").textContent = stream.getVideoTracks()[0]?.label || "camera";
@@ -704,16 +714,20 @@ async function startFile() {
   mode = "file"; els("dSrc").textContent = fileName;
 }
 function startDemo() { stopSource(); mode = "demo"; els("dSrc").textContent = "demo"; }
+// fills both the settings-panel picker and the start-screen one (so a camera that fails
+// to open can be swapped for another before anything has started)
 async function listCameras() {
-  const sel = els("cam");
-  try {
-    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+  let cams = [];
+  try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput" && d.deviceId); }
+  catch (e) { return 0; }
+  const cur = stream?.getVideoTracks()[0]?.getSettings().deviceId || cfg.camId;
+  for (const sel of [els("cam"), els("startCamSel")]) {
     sel.innerHTML = "";
     cams.forEach((c, i) => { const o = document.createElement("option"); o.value = c.deviceId;
       o.textContent = c.label || `Camera ${i + 1}`; sel.appendChild(o); });
-    const cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
-    if (cur) sel.value = cur;
-  } catch (e) {}
+    if (cur && cams.some(c => c.deviceId === cur)) sel.value = cur;
+  }
+  return cams.length;
 }
 
 // ---- main loop -------------------------------------------------------------------
@@ -803,6 +817,7 @@ els("startFile").addEventListener("click", () => els("file").click());
 els("demoBtn").addEventListener("click", () => go(async () => startDemo(), false));
 els("startDemo").addEventListener("click", () => go(async () => startDemo(), false));
 els("startCam").addEventListener("click", () => go(startCamera));
+els("startCamSel").addEventListener("change", () => { cfg.camId = els("startCamSel").value; saveCfg(); go(startCamera); });
 els("file").addEventListener("change", () => {
   const f = els("file").files[0]; if (!f) return;
   if (fileUrl) URL.revokeObjectURL(fileUrl);
@@ -830,8 +845,13 @@ async function go(startFn, needTrackers = true) {
     await startFn();
     els("start").classList.add("hidden");
   } catch (e) {
-    els("startErr").textContent = "Couldn't start: " + (e?.message || e);
+    const busy = e?.name === "NotReadableError" || e?.name === "TrackStartError";
+    els("startErr").textContent = busy
+      ? "Couldn't open that camera. Close anything else using it (Camera app, OBS, Teams, other tabs), " +
+        "start OBS Virtual Camera if that's the source, or pick another camera above."
+      : "Couldn't start: " + (e?.message || e);
     els("start").classList.remove("hidden");
+    els("startCamWrap").hidden = (await listCameras()) < 1;
     console.error(e);
   }
 }
