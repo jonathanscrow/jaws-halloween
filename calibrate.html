@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JAWS test pattern</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  /* same fixed 1920x1080 frame as jaws.html, letterboxed to the window */
+  canvas { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Projector test pattern for the garage door. F = fullscreen.
+// Squares should look square and circles round (keystone / stretch); the white border
+// should sit just inside the door; the fine lines should be crisp (focus).
+const W = 1920, H = 1080, c = document.getElementById("c"), g = c.getContext("2d");
+
+function draw() {
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+
+  // 120px grid: exactly 16 x 9 squares, so any keystone shows as non-square cells
+  g.strokeStyle = "#3a3a3a"; g.lineWidth = 2;
+  for (let x = 0; x <= W; x += 120) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+  for (let y = 0; y <= H; y += 120) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+
+  // centre lines
+  g.strokeStyle = "#888"; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+
+  // big centre circle + one in each corner: ovals mean the image is stretched or keystoned
+  g.strokeStyle = "#fff"; g.lineWidth = 4;
+  g.beginPath(); g.arc(W / 2, H / 2, 480, 0, Math.PI * 2); g.stroke();
+  for (const [x, y] of [[240, 240], [W - 240, 240], [240, H - 240], [W - 240, H - 240]]) {
+    g.beginPath(); g.arc(x, y, 180, 0, Math.PI * 2); g.stroke();
+  }
+
+  // frame edge: this is where the picture ends
+  g.strokeStyle = "#fff"; g.lineWidth = 6; g.strokeRect(3, 3, W - 6, H - 6);
+  // corner markers
+  g.strokeStyle = "#ff3b30"; g.lineWidth = 10;
+  for (const [x, y, dx, dy] of [[0, 0, 1, 1], [W, 0, -1, 1], [0, H, 1, -1], [W, H, -1, -1]]) {
+    g.beginPath(); g.moveTo(x + dx * 5, y + dy * 160); g.lineTo(x + dx * 5, y + dy * 5); g.lineTo(x + dx * 160, y + dy * 5); g.stroke();
+  }
+
+  // focus targets: alternating 1px and 2px lines, centre and halfway to each side
+  for (const cx of [W / 2, W / 4, W * 3 / 4]) {
+    for (let i = 0; i < 40; i++) {
+      g.fillStyle = i % 2 ? "#000" : "#fff";
+      g.fillRect(cx - 60 + i * 3, H / 2 - 150, i < 20 ? 1 : 2, 100);
+      g.fillRect(cx - 60, H / 2 + 50 + i * 3, 120, i < 20 ? 1 : 2);
+    }
+  }
+
+  // brightness steps: you should be able to tell every block apart
+  const steps = 11, bw = 90, x0 = W / 2 - steps * bw / 2, y0 = H - 230;
+  for (let i = 0; i < steps; i++) {
+    const v = Math.round(255 * i / (steps - 1));
+    g.fillStyle = `rgb(${v},${v},${v})`; g.fillRect(x0 + i * bw, y0, bw, 60);
+  }
+  // colour bars, including the show's ocean and shark colours
+  const bars = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#00ffff", "#ff00ff", "#0c3a52", "#5A6570", "#F2EDE4"];
+  bars.forEach((col, i) => { g.fillStyle = col; g.fillRect(W / 2 - bars.length * 50 + i * 100, y0 + 70, 100, 50); });
+
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.font = "bold 44px Arial, sans-serif";
+  g.fillText("JAWS  ·  1920 × 1080", W / 2, 150);
+  g.font = "28px Arial, sans-serif"; g.fillStyle = "#bbb";
+  g.fillText("Border on the door edges · squares square · circles round · fine lines sharp", W / 2, 200);
+  g.font = "bold 28px Arial, sans-serif"; g.fillStyle = "#ff3b30";
+  g.textAlign = "left"; g.fillText("TOP LEFT", 30, 60); g.fillText("BOTTOM LEFT", 30, H - 40);
+  g.textAlign = "right"; g.fillText("TOP RIGHT", W - 30, 60); g.fillText("BOTTOM RIGHT", W - 30, H - 40);
+}
+
+function fit() {
+  const k = Math.min(innerWidth / W, innerHeight / H);
+  c.style.width = `${W * k}px`; c.style.height = `${H * k}px`;
+}
+addEventListener("resize", fit); fit(); draw();
+addEventListener("keydown", e => {
+  if (e.key === "f" || e.key === "F") {
+    if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+  }
+});
+c.addEventListener("dblclick", () => document.documentElement.requestFullscreen().catch(() => {}));
+</script>
+</body>
+</html>
